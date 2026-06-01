@@ -36,9 +36,10 @@ Options:
   console.log(`Set NO_PROXY to ${noProxy}`);
   console.log(`Proxy listener: ${isProxyListening(proxy) ? "ok" : "missing"}`);
 
-  const pids = findCodexAppServerPids();
-  if (pids.length > 0) {
-    console.log(`Codex app-server is already running (${pids.join(", ")}). Restart Codex to inherit the new environment.`);
+  const servers = findCodexAppServerPids();
+  const mainPids = servers.filter((server) => server.kind === "main").map((server) => server.pid);
+  if (mainPids.length > 0) {
+    console.log(`Codex main app-server is already running (${mainPids.join(", ")}). Restart Codex to inherit the new environment.`);
   }
 }
 

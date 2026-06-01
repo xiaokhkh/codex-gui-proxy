@@ -45,7 +45,14 @@ export function findCodexAppServerPids() {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.includes("/Applications/Codex.app/Contents/Resources/codex app-server"))
-    .map((line) => line.split(/\s+/, 1)[0])
+    .map((line) => {
+      const pid = line.split(/\s+/, 1)[0];
+      return {
+        pid,
+        command: line.slice(pid.length).trim(),
+        kind: line.includes("--analytics-default-enabled") ? "main" : "stdio"
+      };
+    })
     .filter(Boolean);
 }
 

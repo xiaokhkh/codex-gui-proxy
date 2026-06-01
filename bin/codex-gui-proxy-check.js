@@ -30,7 +30,9 @@ Options:
   const requiredProxyKeys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"];
   const requiredNoProxyKeys = ["NO_PROXY"];
   const launchctlValues = new Map([...requiredProxyKeys, ...requiredNoProxyKeys].map((key) => [key, launchctlGetenv(key)]));
-  const pids = findCodexAppServerPids();
+  const servers = findCodexAppServerPids();
+  const mainServers = servers.filter((server) => server.kind === "main");
+  const stdioServers = servers.filter((server) => server.kind === "stdio");
   const proxyListening = isProxyListening(proxy);
 
   console.log(`Proxy target: ${proxy}`);
@@ -42,20 +44,30 @@ Options:
   }
   console.log(`launchctl NO_PROXY: ${launchctlValues.get("NO_PROXY") || "(empty)"}`);
 
-  if (pids.length === 0) {
-    console.log("Codex app-server: not running");
+  if (mainServers.length === 0) {
+    console.log("Codex main app-server: not running");
   } else {
-    for (const pid of pids) {
-      const env = processEnvForPid(pid);
+    for (const server of mainServers) {
+      const env = processEnvForPid(server.pid);
       const values = requiredProxyKeys.map((key) => `${key}=${env.get(key) || "(empty)"}`).join(" ");
-      console.log(`Codex app-server pid ${pid}: ${values}`);
+      console.log(`Codex main app-server pid ${server.pid}: ${values}`);
     }
+  }
+
+  if (stdioServers.length > 0) {
+    console.log(`Codex stdio app-server processes: ${stdioServers.length} running`);
+    for (const server of stdioServers) {
+      const env = processEnvForPid(server.pid);
+      const values = requiredProxyKeys.map((key) => `${key}=${env.get(key) || "(empty)"}`).join(" ");
+      console.log(`Codex stdio app-server pid ${server.pid}: ${values}`);
+    }
+    console.log("Note: stdio app-server processes are local helper transports. They may keep old env vars until their parent tools restart.");
   }
 
   const launchctlOk = requiredProxyKeys.every((key) => launchctlValues.get(key) === proxyMap.values[key])
     && requiredNoProxyKeys.every((key) => launchctlValues.get(key) === noProxy);
-  const runningCodexOk = pids.length === 0 || pids.every((pid) => {
-    const env = processEnvForPid(pid);
+  const runningCodexOk = mainServers.length === 0 || mainServers.every((server) => {
+    const env = processEnvForPid(server.pid);
     return requiredProxyKeys.every((key) => env.get(key) === proxyMap.values[key]);
   });
 
