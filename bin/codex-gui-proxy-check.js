@@ -27,9 +27,10 @@ Options:
   const proxy = args.proxy || defaultProxy;
   const proxyMap = args.proxyMap;
   const noProxy = args.noProxy || defaultNoProxy;
-  const requiredProxyKeys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"];
+  const requiredProxyKeys = ["HTTP_PROXY", "HTTPS_PROXY"];
+  const fallbackProxyKeys = ["ALL_PROXY"];
   const requiredNoProxyKeys = ["NO_PROXY"];
-  const launchctlValues = new Map([...requiredProxyKeys, ...requiredNoProxyKeys].map((key) => [key, launchctlGetenv(key)]));
+  const launchctlValues = new Map([...requiredProxyKeys, ...fallbackProxyKeys, ...requiredNoProxyKeys].map((key) => [key, launchctlGetenv(key)]));
   const servers = findCodexAppServerPids();
   const mainServers = servers.filter((server) => server.kind === "main");
   const stdioServers = servers.filter((server) => server.kind === "stdio");
@@ -42,6 +43,9 @@ Options:
   for (const key of requiredProxyKeys) {
     console.log(`launchctl ${key}: ${launchctlValues.get(key) || "(empty)"}`);
   }
+  for (const key of fallbackProxyKeys) {
+    console.log(`launchctl ${key}: ${launchctlValues.get(key) || "(empty)"}`);
+  }
   console.log(`launchctl NO_PROXY: ${launchctlValues.get("NO_PROXY") || "(empty)"}`);
 
   if (mainServers.length === 0) {
@@ -49,7 +53,7 @@ Options:
   } else {
     for (const server of mainServers) {
       const env = processEnvForPid(server.pid);
-      const values = requiredProxyKeys.map((key) => `${key}=${env.get(key) || "(empty)"}`).join(" ");
+      const values = [...requiredProxyKeys, ...fallbackProxyKeys].map((key) => `${key}=${env.get(key) || "(empty)"}`).join(" ");
       console.log(`Codex main app-server pid ${server.pid}: ${values}`);
     }
   }
@@ -58,7 +62,7 @@ Options:
     console.log(`Codex stdio app-server processes: ${stdioServers.length} running`);
     for (const server of stdioServers) {
       const env = processEnvForPid(server.pid);
-      const values = requiredProxyKeys.map((key) => `${key}=${env.get(key) || "(empty)"}`).join(" ");
+      const values = [...requiredProxyKeys, ...fallbackProxyKeys].map((key) => `${key}=${env.get(key) || "(empty)"}`).join(" ");
       console.log(`Codex stdio app-server pid ${server.pid}: ${values}`);
     }
     console.log("Note: stdio app-server processes are local helper transports. They may keep old env vars until their parent tools restart.");
@@ -66,12 +70,16 @@ Options:
 
   const launchctlOk = requiredProxyKeys.every((key) => launchctlValues.get(key) === proxyMap.values[key])
     && requiredNoProxyKeys.every((key) => launchctlValues.get(key) === noProxy);
+  const fallbackProxyOk = fallbackProxyKeys.every((key) => launchctlValues.get(key) === proxyMap.values[key]);
   const runningCodexOk = mainServers.length === 0 || mainServers.every((server) => {
     const env = processEnvForPid(server.pid);
     return requiredProxyKeys.every((key) => env.get(key) === proxyMap.values[key]);
   });
 
   if (proxyListening && launchctlOk && runningCodexOk) {
+    if (!fallbackProxyOk) {
+      console.log("Warning: ALL_PROXY differs from the expected fallback value, but HTTP_PROXY/HTTPS_PROXY are correct for Codex GUI reconnecting.");
+    }
     console.log("Status: ok");
     return;
   }
