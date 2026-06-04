@@ -9,6 +9,8 @@ const [command, ...args] = process.argv.slice(2);
 if (!command || command === "-h" || command === "--help") {
   console.log(`Usage:
   codex-gui-proxy check
+  codex-gui-proxy clean --dry-run
+  codex-gui-proxy clean --apply
   codex-gui-proxy set --proxy 127.0.0.1:7890
 
 Options:
@@ -17,12 +19,15 @@ Options:
 
 Aliases:
   codex-gui-proxy-check
+  codex-gui-proxy-clean
   codex-gui-proxy-set`);
   process.exit(0);
 }
 
 const script = command === "check"
   ? "codex-gui-proxy-check.js"
+  : command === "clean"
+    ? "codex-gui-proxy-clean.js"
   : command === "set"
     ? "codex-gui-proxy-set.js"
     : null;

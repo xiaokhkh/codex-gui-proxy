@@ -1,11 +1,12 @@
 {
   "name": "codex-gui-proxy",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "description": "Detect and configure proxy environment for the macOS Codex GUI app server.",
   "type": "module",
   "bin": {
     "codex-gui-proxy": "bin/codex-gui-proxy.js",
     "codex-gui-proxy-check": "bin/codex-gui-proxy-check.js",
+    "codex-gui-proxy-clean": "bin/codex-gui-proxy-clean.js",
     "codex-gui-proxy-set": "bin/codex-gui-proxy-set.js"
   },
   "files": [

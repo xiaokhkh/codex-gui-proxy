@@ -3,10 +3,13 @@ import {
   assertMacOS,
   defaultNoProxy,
   defaultProxy,
+  envMatchesProxy,
   findCodexAppServerPids,
+  findCodexCliPids,
   isProxyListening,
   parseArgs,
   plistPath,
+  processEnvForPid,
   writeAndLoadLaunchAgent
 } from "./lib.js";
 
@@ -37,9 +40,18 @@ Options:
   console.log(`Proxy listener: ${isProxyListening(proxy) ? "ok" : "missing"}`);
 
   const servers = findCodexAppServerPids();
-  const mainPids = servers.filter((server) => server.kind === "main").map((server) => server.pid);
+  const mainPids = servers.filter((server) => server.source === "gui-main").map((server) => server.pid);
   if (mainPids.length > 0) {
     console.log(`Codex main app-server is already running (${mainPids.join(", ")}). Restart Codex to inherit the new environment.`);
+  }
+
+  const cliProcesses = findCodexCliPids();
+  const staleCliProcesses = cliProcesses.filter((processInfo) => {
+    const env = processEnvForPid(processInfo.pid);
+    return !envMatchesProxy(env, ["HTTP_PROXY", "HTTPS_PROXY"], proxyMap);
+  });
+  if (staleCliProcesses.length > 0) {
+    console.log(`Codex CLI sessions already running (${staleCliProcesses.map((processInfo) => processInfo.pid).join(", ")}) still have old shell env. Restart those CLI sessions from a shell with matching proxy vars.`);
   }
 }
 

@@ -9,6 +9,7 @@ export const defaultProxy = "http://127.0.0.1:7890";
 export const defaultProxyInput = "127.0.0.1:7890";
 export const defaultNoProxy = "localhost,127.0.0.1,::1";
 const proxyEnvKeys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"];
+const codexAppServerFragment = "/Applications/Codex.app/Contents/Resources/codex app-server";
 
 export function assertMacOS() {
   if (platform() !== "darwin") {
@@ -39,21 +40,145 @@ export function launchctlGetenv(name) {
   return result.ok ? result.stdout : "";
 }
 
+export function readProcesses() {
+  const output = tryRun("/bin/ps", ["axo", "pid=,ppid=,command="]).stdout;
+  const processes = [];
+  for (const line of output.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+    if (!match) continue;
+    processes.push({
+      pid: match[1],
+      ppid: match[2],
+      command: match[3]
+    });
+  }
+  return processes;
+}
+
 export function findCodexAppServerPids() {
-  const output = tryRun("/bin/ps", ["axo", "pid=,command="]).stdout;
+  const processes = readProcesses();
+  const processByPid = new Map(processes.map((processInfo) => [processInfo.pid, processInfo]));
+  return processes
+    .filter((processInfo) => processInfo.command.includes(codexAppServerFragment))
+    .map((processInfo) => {
+      const parentChain = buildParentChain(processInfo, processByPid);
+      const kind = processInfo.command.includes("--analytics-default-enabled") ? "main" : "stdio";
+      return {
+        pid: processInfo.pid,
+        ppid: processInfo.ppid,
+        command: processInfo.command,
+        kind,
+        source: classifyAppServerSource(kind, parentChain),
+        parentCommand: parentChain[0]?.command || ""
+      };
+    });
+}
+
+export function findCodexCliPids() {
+  return readProcesses()
+    .filter((processInfo) => isCodexCliProcess(processInfo.command))
+    .map((processInfo) => ({
+      pid: processInfo.pid,
+      ppid: processInfo.ppid,
+      command: processInfo.command,
+      kind: processInfo.command.includes("node ") ? "node-wrapper" : "native"
+    }));
+}
+
+function buildParentChain(processInfo, processByPid) {
+  const chain = [];
+  let current = processInfo;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const parent = processByPid.get(current.ppid);
+    if (!parent) break;
+    chain.push(parent);
+    current = parent;
+  }
+  return chain;
+}
+
+function classifyAppServerSource(kind, parentChain) {
+  if (kind === "main") return "gui-main";
+  if (parentChain.some((processInfo) => processInfo.command.includes(`${codexAppServerFragment} --analytics-default-enabled`))) {
+    return "gui-helper";
+  }
+  if (parentChain.some((processInfo) => isCodexCliProcess(processInfo.command))) {
+    return "cli-helper";
+  }
+  return "stdio-helper";
+}
+
+function isCodexCliProcess(command) {
+  if (command.includes(codexAppServerFragment)) return false;
+  return /(?:^|\s)node\s+.*\/bin\/codex(?:\s|$)/.test(command)
+    || command.includes("/node_modules/@openai/codex")
+    || command.includes("/vendor/aarch64-apple-darwin/bin/codex");
+}
+
+export function summarizeProxyEnv(env, keys) {
+  return keys.map((key) => `${key}=${env.get(key) || "(empty)"}`).join(" ");
+}
+
+export function envMatchesProxy(env, keys, proxyMap) {
+  return keys.every((key) => env.get(key) === proxyMap.values[key]);
+}
+
+export function listWithLabel(items) {
+  return items.length === 0 ? "none" : items.join(", ");
+}
+
+export function proxyListenerStatus(proxyUrl) {
+  let url;
+  try {
+    url = new URL(normalizeProxy(proxyUrl).primary);
+  } catch {
+    return { listening: false, detail: "invalid proxy URL" };
+  }
+  const host = normalizeListenerHost(url.hostname);
+  const port = url.port;
+  if (!host || !port) return { listening: false, detail: "missing host or port" };
+
+  const exactResult = tryRun("/usr/sbin/lsof", ["-nP", `-iTCP@${host}:${port}`, "-sTCP:LISTEN"]);
+  const exactLines = listenerLines(exactResult.stdout, port);
+  if (exactResult.ok && exactLines.length > 0) {
+    return { listening: true, detail: exactLines[0] };
+  }
+
+  const portResult = tryRun("/usr/sbin/lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN"]);
+  const portLines = listenerLines(portResult.stdout, port);
+  const matchingLine = portLines.find((line) => listenerLineMatchesHost(line, host, port));
+  if (portResult.ok && matchingLine) {
+    return { listening: true, detail: matchingLine };
+  }
+
+  if (portResult.ok && portLines.length > 0) {
+    return { listening: false, detail: `port ${port} is listening on a different address` };
+  }
+  return { listening: false, detail: `no listener on ${host}:${port}` };
+}
+
+function listenerLines(output, port) {
   return output
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => line.includes("/Applications/Codex.app/Contents/Resources/codex app-server"))
-    .map((line) => {
-      const pid = line.split(/\s+/, 1)[0];
-      return {
-        pid,
-        command: line.slice(pid.length).trim(),
-        kind: line.includes("--analytics-default-enabled") ? "main" : "stdio"
-      };
-    })
-    .filter(Boolean);
+    .filter((line) => line.includes(`:${port}`) && line.includes("LISTEN"));
+}
+
+function listenerLineMatchesHost(line, host, port) {
+  if (line.includes(`*:${port}`)) return true;
+  const hostCandidates = listenerHostCandidates(host);
+  return hostCandidates.some((candidate) => line.includes(`${candidate}:${port}`));
+}
+
+function listenerHostCandidates(host) {
+  if (host === "localhost") return ["localhost", "127.0.0.1", "::1", "[::1]"];
+  if (host === "127.0.0.1") return ["127.0.0.1", "localhost"];
+  if (host === "::1" || host === "[::1]") return ["::1", "[::1]", "localhost"];
+  return [host];
+}
+
+function normalizeListenerHost(host) {
+  return String(host || "").replace(/^\[(.*)\]$/, "$1");
 }
 
 export function processEnvForPid(pid) {
@@ -67,17 +192,7 @@ export function processEnvForPid(pid) {
 }
 
 export function isProxyListening(proxyUrl) {
-  let url;
-  try {
-    url = new URL(normalizeProxy(proxyUrl).primary);
-  } catch {
-    return false;
-  }
-  const host = url.hostname;
-  const port = url.port;
-  if (!host || !port) return false;
-  const result = tryRun("/usr/sbin/lsof", ["-nP", `-iTCP@${host}:${port}`, "-sTCP:LISTEN"]);
-  return result.ok && result.stdout.includes(`:${port}`) && result.stdout.includes("LISTEN");
+  return proxyListenerStatus(proxyUrl).listening;
 }
 
 export function parseArgs(argv) {
